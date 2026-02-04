@@ -16,6 +16,7 @@
 package dev.waterdog.waterdogpe.network.protocol.rewrite;
 
 import it.unimi.dsi.fastutil.longs.LongListIterator;
+import org.cloudburstmc.protocol.bedrock.data.camera.CameraAttachToEntityInstruction;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataMap;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataType;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataTypes;
@@ -221,6 +222,11 @@ public class EntityMap implements BedrockPacketHandler {
     }
 
     @Override
+    public PacketSignal handle(PlayerLocationPacket packet) {
+        return rewriteId(packet.getTargetEntityId(), packet::setTargetEntityId);
+    }
+
+    @Override
     public PacketSignal handle(SetEntityLinkPacket packet) {
         EntityLinkData entityLink = packet.getEntityLink();
         long from = PlayerRewriteUtils.rewriteId(entityLink.getFrom(), this.rewrite.getEntityId(), this.rewrite.getOriginalEntityId());
@@ -322,6 +328,16 @@ public class EntityMap implements BedrockPacketHandler {
     }
 
     @Override
+    public PacketSignal handle(PlayerUpdateEntityOverridesPacket packet) {
+        return rewriteId(packet.getEntityUniqueId(), packet::setEntityUniqueId);
+    }
+
+    @Override
+    public PacketSignal handle(LevelSoundEventPacket packet) {
+        return rewriteId(packet.getEntityUniqueId(), packet::setEntityUniqueId);
+    }
+
+    @Override
     public PacketSignal handle(AnimateEntityPacket packet) {
         PacketSignal signal = PacketSignal.UNHANDLED;
         LongListIterator iterator = packet.getRuntimeEntityIds().listIterator();
@@ -332,11 +348,37 @@ public class EntityMap implements BedrockPacketHandler {
         return signal;
     }
 
+    @Override
+    public PacketSignal handle(MovementEffectPacket packet) {
+        return rewriteId(packet.getEntityRuntimeId(), packet::setEntityRuntimeId);
+    }
+
+    @Override
+    public PacketSignal handle(MovementPredictionSyncPacket packet) {
+        return rewriteId(packet.getRuntimeEntityId(), packet::setRuntimeEntityId);
+    }
+
+    @Override
+    public PacketSignal handle(UpdateEquipPacket packet) {
+        return rewriteId(packet.getUniqueEntityId(), packet::setUniqueEntityId);
+    }
+
+    @Override
+    public PacketSignal handle(CameraInstructionPacket packet) {
+        PacketSignal signal = PacketSignal.UNHANDLED;
+        CameraAttachToEntityInstruction attachInstruction = packet.getAttachInstruction();
+        if (attachInstruction != null) {
+            PacketSignal returnedSignal = rewriteId(attachInstruction.getUniqueEntityId(), attachInstruction::setUniqueEntityId);
+            signal = mergeSignals(signal, returnedSignal);
+        }
+        return signal;
+    }
+
     private PacketSignal rewriteMetadata(EntityDataMap metadata) {
         PacketSignal signal = PacketSignal.UNHANDLED;
         for (EntityDataType<Long> data : ENTITY_DATA_FIELDS) {
             Long id = metadata.get(data);
-            if (id != null && id > 0L) { // IDs start at 1, so this is safe
+            if (id != null) {
                 long rewriteId = PlayerRewriteUtils.rewriteId(id, this.rewrite.getEntityId(), this.rewrite.getOriginalEntityId());
                 if (rewriteId != id) {
                     metadata.put(data, rewriteId);

@@ -112,12 +112,20 @@ public class ProtocolCodecs {
         HANDLED_PACKETS.add(LevelChunkPacket.class);
         HANDLED_PACKETS.add(ClientCheatAbilityPacket.class);
         HANDLED_PACKETS.add(ToastRequestPacket.class);
+        HANDLED_PACKETS.add(MovementEffectPacket.class);
         HANDLED_PACKETS.add(PlaySoundPacket.class);
         HANDLED_PACKETS.add(PlayerAuthInputPacket.class);
         HANDLED_PACKETS.add(ModalFormRequestPacket.class);
         HANDLED_PACKETS.add(ModalFormResponsePacket.class);
         HANDLED_PACKETS.add(BlockEntityDataPacket.class);
-
+        HANDLED_PACKETS.add(InventoryTransactionPacket.class);
+        HANDLED_PACKETS.add(ClientboundCloseFormPacket.class);
+        HANDLED_PACKETS.add(UpdateEquipPacket.class);
+        HANDLED_PACKETS.add(CameraInstructionPacket.class);
+        HANDLED_PACKETS.add(MovementPredictionSyncPacket.class);
+        HANDLED_PACKETS.add(PlayerUpdateEntityOverridesPacket.class);
+        HANDLED_PACKETS.add(PlayerLocationPacket.class);
+        HANDLED_PACKETS.add(CameraPresetsPacket.class);
     }
 
     private static final List<ProtocolCodecUpdater> UPDATERS = new ObjectArrayList<>();

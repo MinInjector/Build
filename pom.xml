@@ -8,14 +8,14 @@
     </description>
     <groupId>xyz.syodo.software</groupId>
     <artifactId>syodogpe</artifactId>
-    <version>2.0.0</version>
+    <version>2.0.4</version>
     <packaging>jar</packaging>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>17</maven.compiler.release>
         <raklib.version>1.0.0.CR3-SNAPSHOT</raklib.version>
-        <protocol.version>3.0.0.Beta5-SNAPSHOT</protocol.version>
+        <protocol.version>3.0.0.Beta11-SNAPSHOT</protocol.version>
         <log4j2.version>2.17.1</log4j2.version>
         <jline.version>3.23.0</jline.version>
         <netty.version>4.1.101.Final</netty.version>
@@ -67,7 +67,7 @@
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
-            <version>1.31</version>
+            <version>1.32</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -85,7 +85,7 @@
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
-            <version>1.18.30</version>
+            <version>1.18.34</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -133,12 +133,6 @@
             <groupId>org.jline</groupId>
             <artifactId>jline-reader</artifactId>
             <version>${jline.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.google.guava</groupId>
-            <artifactId>guava</artifactId>
-            <version>33.1.0-jre</version>
             <scope>compile</scope>
         </dependency>
         <dependency>

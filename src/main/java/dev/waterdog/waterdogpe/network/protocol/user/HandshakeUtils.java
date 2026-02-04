@@ -15,9 +15,7 @@
 
 package dev.waterdog.waterdogpe.network.protocol.user;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.google.gson.*;
 import com.nimbusds.jose.*;
 import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.crypto.ECDSAVerifier;
@@ -28,11 +26,13 @@ import dev.waterdog.waterdogpe.ProxyServer;
 import dev.waterdog.waterdogpe.network.protocol.ProtocolVersion;
 import dev.waterdog.waterdogpe.utils.config.proxy.ProxyConfig;
 import lombok.Getter;
+import lombok.extern.log4j.Log4j2;
 import org.cloudburstmc.protocol.bedrock.BedrockSession;
+import org.cloudburstmc.protocol.bedrock.data.auth.CertificateChainPayload;
 import org.cloudburstmc.protocol.bedrock.packet.LoginPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ServerToClientHandshakePacket;
+import org.cloudburstmc.protocol.bedrock.util.ChainValidationResult;
 import org.cloudburstmc.protocol.bedrock.util.EncryptionUtils;
-import org.cloudburstmc.protocol.common.util.Preconditions;
 
 import javax.crypto.SecretKey;
 import java.net.InetSocketAddress;
@@ -40,21 +40,15 @@ import java.net.URI;
 import java.security.*;
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
-import java.security.spec.InvalidKeySpecException;
-import java.security.spec.X509EncodedKeySpec;
 import java.text.ParseException;
 import java.util.Base64;
-import java.util.Iterator;
-import java.util.List;
 import java.util.UUID;
 
 /**
  * Various utilities for parsing Handshake data
  */
+@Log4j2
 public class HandshakeUtils {
-
-    private static final ECPublicKey MOJANG_PUBLIC_KEY_OLD;
-    private static final ECPublicKey MOJANG_PUBLIC_KEY;
 
     @Getter
     private static final KeyPair privateKeyPair;
@@ -64,62 +58,12 @@ public class HandshakeUtils {
             KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
             generator.initialize(Curve.P_384.toECParameterSpec());
             privateKeyPair = generator.generateKeyPair();
-
-            MOJANG_PUBLIC_KEY_OLD = generateKey("MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE8ELkixyLcwlZryUQcu1TvPOmI2B7vX83ndnWRUaXm74wFfa5f/lwQNTfrLVHa2PmenpGI6JhIMUJaWZrjmMj90NoKNFSNBuKdm8rYiXsfaz3K36x/1U26HpG0ZxK/V1V");
-            MOJANG_PUBLIC_KEY = generateKey("MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAECRXueJeTDqNRRgJi/vlRufByu/2G0i2Ebt6YMar5QX/R0DIIyrJMcUpruK4QveTfJSTp3Shlq4Gk34cD/4GUWwkv0DVuzeuB+tXija7HBxii03NHDbPAD0AKnLr2wdAp");
         } catch (Exception e) {
             throw new RuntimeException("Unable to generate private keyPair!", e);
         }
     }
 
-    public static boolean validateChain(List<String> chainArray, boolean strict) throws Exception {
-        if (strict && chainArray.size() > 3) {
-            // We dont expect larger chain
-            return false;
-        }
-
-        ECPublicKey lastKey = null;
-        boolean authed = false;
-        Iterator<String> iterator = chainArray.iterator();
-        while(iterator.hasNext()){
-            SignedJWT jwt = SignedJWT.parse(iterator.next());
-
-            URI x5u = jwt.getHeader().getX509CertURL();
-            if (x5u == null) {
-                throw new JOSEException("Key not found");
-            }
-
-            ECPublicKey expectedKey = generateKey(jwt.getHeader().getX509CertURL().toString());
-            if (lastKey == null) {
-                // First key is self signed
-                lastKey = expectedKey;
-            } else if (strict && !lastKey.equals(expectedKey)) {
-                // Make sure the previous key matches the header of the current
-                throw new IllegalArgumentException("Key does not match");
-            }
-
-            if (!verifyJwt(jwt, lastKey)) {
-                if (strict) {
-                    throw new JOSEException("Login JWT was not valid");
-                }
-                return false;
-            }
-
-            if (MOJANG_PUBLIC_KEY.equals(lastKey) || MOJANG_PUBLIC_KEY_OLD.equals(lastKey)) {
-                authed = true;
-            } else if (authed) {
-                return !iterator.hasNext();
-            }
-
-            JsonObject payload = (JsonObject) JsonParser.parseString(jwt.getPayload().toString());
-            Preconditions.checkArgument(payload.has("identityPublicKey"), "IdentityPublicKey node is missing in chain!");
-            JsonElement ipkNode = payload.get("identityPublicKey");
-            lastKey = generateKey(ipkNode.getAsString());
-        }
-        return authed;
-    }
-
-    public static SignedJWT createExtraData(KeyPair pair, JsonObject extraData) {
+    public static SignedJWT createClientDataChain(KeyPair pair, JsonObject extraData) {
         String publicKeyBase64 = Base64.getEncoder().encodeToString(pair.getPublic().getEncoded());
         long timestamp = System.currentTimeMillis() / 1000;
 
@@ -132,6 +76,20 @@ public class HandshakeUtils {
         dataChain.add("extraData", extraData);
         dataChain.addProperty("randomNonce", UUID.randomUUID().getLeastSignificantBits());
         dataChain.addProperty("identityPublicKey", publicKeyBase64);
+        return encodeJWT(pair, dataChain);
+    }
+
+    public static SignedJWT createClientDataToken(KeyPair pair, String displayName, String xuid) {
+        String publicKeyBase64 = Base64.getEncoder().encodeToString(pair.getPublic().getEncoded());
+        long timestamp = System.currentTimeMillis() / 1000;
+
+        JsonObject dataChain = new JsonObject();
+        dataChain.addProperty("iat", timestamp);
+        dataChain.addProperty("exp", timestamp + 24 * 3600);
+        dataChain.addProperty("iss", "self");
+        dataChain.addProperty("cpk", publicKeyBase64);
+        dataChain.addProperty("xid", xuid);
+        dataChain.addProperty("xname", displayName);
         return encodeJWT(pair, dataChain);
     }
 
@@ -148,10 +106,6 @@ public class HandshakeUtils {
         }
     }
 
-    public static ECPublicKey generateKey(String b64) throws NoSuchAlgorithmException, InvalidKeySpecException {
-        return (ECPublicKey) KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(b64)));
-    }
-
     public static void signJwt(JWSObject jws, ECPrivateKey key) throws JOSEException {
         jws.sign(new ECDSASigner(key, Curve.P_384));
     }
@@ -161,52 +115,47 @@ public class HandshakeUtils {
     }
 
     public static HandshakeEntry processHandshake(BedrockSession session, LoginPacket packet, ProtocolVersion protocol, boolean strict) throws Exception {
-        List<String> chain = packet.getChain();
-        if (chain.isEmpty()) {
-            throw new IllegalArgumentException("Invalid chain data");
-        }
+        ChainValidationResult result = EncryptionUtils.validatePayload(packet.getAuthPayload());
+        boolean xboxAuth = result.signed();
+        ChainValidationResult.IdentityClaims identityClaims = result.identityClaims();
+        ChainValidationResult.IdentityData identityData = identityClaims.extraData;
+        ECPublicKey identityPublicKey = (ECPublicKey) identityClaims.parsedIdentityPublicKey();
+        String xuid = identityData.xuid;
+        //UUID uuid = UUID.nameUUIDFromBytes(("pocket-auth-1-xuid:" + xuid).getBytes(StandardCharsets.UTF_8));
+        UUID uuid = identityData.identity;
 
-        boolean xboxAuth = HandshakeUtils.validateChain(chain, strict);
-        JsonObject payload = (JsonObject) JsonParser.parseString(SignedJWT.parse(chain.get(chain.size() - 1)).getPayload().toString());
-        JsonObject extraData = HandshakeUtils.parseExtraData(packet, payload);
-
-        if (!payload.has("identityPublicKey")) {
-            throw new RuntimeException("Identity Public Key was not found!");
-        }
-        String identityPublicKeyString = payload.get("identityPublicKey").getAsString();
-
-        ECPublicKey identityPublicKey = generateKey(identityPublicKeyString);
-        SignedJWT extraDataJwt = SignedJWT.parse(packet.getExtra());
-        if (!verifyJwt(extraDataJwt, identityPublicKey) && strict) {
+        SignedJWT clientDataJwt = SignedJWT.parse(packet.getClientJwt());
+        JsonObject clientData = HandshakeUtils.parseClientData(clientDataJwt, xuid, session);
+        if (!verifyJwt(clientDataJwt, identityPublicKey) && strict) {
             xboxAuth = false;
         }
-        JsonObject clientData = HandshakeUtils.parseClientData(extraDataJwt, extraData, session);
-        return new HandshakeEntry(identityPublicKey, clientData, extraData, xboxAuth, protocol);
+        String displayName;
+        if (ProxyServer.getInstance().getConfiguration().isReplaceUsernameSpaces()) {
+            displayName = identityData.displayName
+                    .replaceAll(" ", "_");
+        } else {
+            displayName = identityData.displayName;
+        }
+
+        if (xboxAuth) {
+            ProxyConfig config = ProxyServer.getInstance().getConfiguration();
+            if (config.useLoginExtras()) {
+                clientData.addProperty("Waterdog_Auth", true);
+            }
+        }
+        return new HandshakeEntry(identityPublicKey, clientData, xuid, uuid, displayName, xboxAuth, protocol,
+                packet.getAuthPayload() instanceof CertificateChainPayload);
     }
 
-    public static JsonObject parseClientData(JWSObject clientJwt, JsonObject extraData, BedrockSession session) {
+    public static JsonObject parseClientData(JWSObject clientJwt, String xuid, BedrockSession session) throws Exception {
         JsonObject clientData = (JsonObject) JsonParser.parseString(clientJwt.getPayload().toString());
         ProxyConfig config = ProxyServer.getInstance().getConfiguration();
         if (config.useLoginExtras()) {
             // Add waterdog attributes
-            clientData.addProperty("Waterdog_XUID", extraData.get("XUID").getAsString());
+            clientData.addProperty("Waterdog_XUID", xuid);
             clientData.addProperty("Waterdog_IP", ((InetSocketAddress) session.getSocketAddress()).getAddress().getHostAddress());
         }
         return clientData;
-    }
-
-    public static JsonObject parseExtraData(LoginPacket packet, JsonObject payload) {
-        JsonElement extraDataElement = payload.get("extraData");
-        if (!extraDataElement.isJsonObject()) {
-            throw new IllegalStateException("Invalid 'extraData'");
-        }
-
-        JsonObject extraData = extraDataElement.getAsJsonObject();
-        if (ProxyServer.getInstance().getConfiguration().isReplaceUsernameSpaces()) {
-            String playerName = extraData.get("displayName").getAsString();
-            extraData.addProperty("displayName", playerName.replaceAll(" ", "_"));
-        }
-        return extraData;
     }
 
     public static void processEncryption(BedrockSession session, PublicKey key) throws Exception {
@@ -220,5 +169,13 @@ public class HandshakeUtils {
             session.sendPacketImmediately(packet);
             session.enableEncryption(encryptionKey);
         });
+    }
+
+    public static JsonObject createChainExtraData(String displayName, String xuid, UUID uuid) {
+        JsonObject extraData = new JsonObject();
+        extraData.addProperty("displayName", displayName);
+        extraData.addProperty("XUID", xuid);
+        extraData.addProperty("identity", uuid.toString());
+        return extraData;
     }
 }

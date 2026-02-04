@@ -17,24 +17,32 @@ package dev.waterdog.waterdogpe.network.protocol.user;
 
 import com.google.gson.JsonObject;
 import com.nimbusds.jwt.SignedJWT;
+import dev.waterdog.waterdogpe.ProxyServer;
 import dev.waterdog.waterdogpe.network.protocol.ProtocolVersion;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+import org.cloudburstmc.protocol.bedrock.data.auth.AuthType;
+import org.cloudburstmc.protocol.bedrock.data.auth.CertificateChainPayload;
+import org.cloudburstmc.protocol.bedrock.data.auth.TokenPayload;
 import org.cloudburstmc.protocol.bedrock.packet.ClientCacheStatusPacket;
 import org.cloudburstmc.protocol.bedrock.packet.LoginPacket;
 import org.cloudburstmc.protocol.bedrock.packet.RequestChunkRadiusPacket;
 
 import java.net.SocketAddress;
 import java.security.KeyPair;
+import java.util.Collections;
 import java.util.UUID;
 
 /**
  * Holds relevant information passed to the proxy on the first connection (initial) in the LoginPacket.
  */
-@Getter
+@Slf4j
 @Builder
+@Getter
 public class LoginData {
+
     private final String displayName;
     private final UUID uuid;
     private final String xuid;
@@ -52,16 +60,16 @@ public class LoginData {
 
     private final KeyPair keyPair;
     private final JsonObject clientData;
-    private final JsonObject extraData;
-
     private LoginPacket loginPacket;
 
-    @Builder.Default
     @Setter
+    @Builder.Default
     private RequestChunkRadiusPacket chunkRadius = PlayerRewriteUtils.defaultChunkRadius;
-    @Builder.Default
     @Setter
+    @Builder.Default
     private ClientCacheStatusPacket cachePacket = PlayerRewriteUtils.defaultCachePacket;
+
+    private final boolean isChainPayload;
 
     /**
      * Used to construct new login packet using this.clientData and this.extraData signed by this.keyPair.
@@ -70,14 +78,20 @@ public class LoginData {
      * @return new LoginPacket.
      */
     public LoginPacket rebuildLoginPacket() {
-        SignedJWT signedClientData = HandshakeUtils.createExtraData(this.keyPair, this.extraData);
-        SignedJWT signedExtraData = HandshakeUtils.encodeJWT(this.keyPair, this.clientData);
-
         LoginPacket loginPacket = new LoginPacket();
-        loginPacket.getChain().add(signedClientData.serialize());
-        loginPacket.setExtra(signedExtraData.serialize());
+        SignedJWT signedClientData = HandshakeUtils.encodeJWT(this.keyPair, this.clientData);
+        loginPacket.setClientJwt(signedClientData.serialize());
         loginPacket.setProtocolVersion(this.protocol.getProtocol());
-        return this.loginPacket = loginPacket;
+        if (isChainPayload || ProxyServer.getInstance().getConfiguration().useCertificatePayload()) {
+            JsonObject extraData = HandshakeUtils.createChainExtraData(displayName, xuid, uuid);
+            SignedJWT signedPayload = HandshakeUtils.createClientDataChain(this.keyPair, extraData);
+            loginPacket.setAuthPayload(new CertificateChainPayload(Collections.singletonList(signedPayload.serialize()), AuthType.SELF_SIGNED));
+        } else {
+            SignedJWT signedPayload = HandshakeUtils.createClientDataToken(this.keyPair, displayName, xuid);
+            loginPacket.setAuthPayload(new TokenPayload(signedPayload.serialize(), AuthType.SELF_SIGNED));
+        }
+        this.loginPacket = loginPacket;
+        return loginPacket;
     }
 
     public LoginPacket getLoginPacket() {
@@ -86,4 +100,5 @@ public class LoginData {
         }
         return this.loginPacket;
     }
+
 }

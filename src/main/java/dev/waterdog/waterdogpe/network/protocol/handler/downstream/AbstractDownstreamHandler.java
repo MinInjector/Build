@@ -22,10 +22,21 @@ import dev.waterdog.waterdogpe.network.protocol.handler.ProxyPacketHandler;
 import dev.waterdog.waterdogpe.network.protocol.rewrite.RewriteMaps;
 import dev.waterdog.waterdogpe.player.ProxiedPlayer;
 import dev.waterdog.waterdogpe.network.protocol.Signals;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
+import org.cloudburstmc.protocol.bedrock.codec.BedrockCodecHelper;
+import org.cloudburstmc.protocol.bedrock.data.camera.CameraPreset;
+import org.cloudburstmc.protocol.bedrock.data.command.CommandData;
+import org.cloudburstmc.protocol.bedrock.data.command.CommandEnumConstraint;
+import org.cloudburstmc.protocol.bedrock.data.command.CommandEnumData;
 import org.cloudburstmc.protocol.bedrock.data.command.*;
+import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition;
+import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleNamedDefinition;
 import org.cloudburstmc.protocol.bedrock.netty.BedrockBatchWrapper;
 import org.cloudburstmc.protocol.bedrock.packet.*;
+import org.cloudburstmc.protocol.common.NamedDefinition;
 import org.cloudburstmc.protocol.common.PacketSignal;
+import org.cloudburstmc.protocol.common.SimpleDefinitionRegistry;
 
 import java.util.*;
 import java.util.function.Consumer;
@@ -40,6 +51,18 @@ public abstract class AbstractDownstreamHandler implements ProxyPacketHandler {
     public AbstractDownstreamHandler(ProxiedPlayer player, ClientConnection connection) {
         this.player = player;
         this.connection = connection;
+    }
+
+    @Override
+    public PacketSignal handle(ItemComponentPacket packet) {
+        if (!this.player.acceptItemComponentPacket()) {
+            return Signals.CANCEL;
+        }
+        player.setAcceptItemComponentPacket(false);
+        if (this.player.getProtocol().isAfterOrEqual(ProtocolVersion.MINECRAFT_PE_1_21_60)) {
+            setItemDefinitions(packet.getItems());
+        }
+        return PacketSignal.UNHANDLED;
     }
 
     @Override
@@ -68,6 +91,7 @@ public abstract class AbstractDownstreamHandler implements ProxyPacketHandler {
 
         for (Command command : this.player.getProxy().getCommandMap().getCommands().values()) {
             if (command.getPermission() == null || this.player.hasPermission(command.getPermission())) {
+                packet.getCommands().stream().filter(commandData -> commandData.getName().equalsIgnoreCase(command.getName())).findFirst().ifPresent(commandData -> packet.getCommands().remove(commandData));
                 packet.getCommands().add(command.getCommandData());
             }
         }
@@ -80,7 +104,6 @@ public abstract class AbstractDownstreamHandler implements ProxyPacketHandler {
         ListIterator<CommandData> iterator = packet.getCommands().listIterator();
         while (iterator.hasNext()) {
             CommandData command = iterator.next();
-
             if (command.getAliases() != null) {
                 continue;
             }
@@ -95,6 +118,16 @@ public abstract class AbstractDownstreamHandler implements ProxyPacketHandler {
                     new CommandEnumData(command.getName() + "_aliases", aliases, false),
                     Collections.emptyList(),
                     command.getOverloads()));
+        }
+
+        for(CommandData command : packet.getCommands()) {
+            for(CommandOverloadData overload : command.getOverloads()) {
+                for(CommandParamData param : overload.getOverloads()) {
+                    if(param.getType() == null) {
+                        param.setType(CommandParam.UNKNOWN);
+                    }
+                }
+            }
         }
         return PacketSignal.HANDLED;
     }
@@ -116,6 +149,12 @@ public abstract class AbstractDownstreamHandler implements ProxyPacketHandler {
         if (this.player.getProtocol().isBefore(ProtocolVersion.MINECRAFT_PE_1_18_30)) {
             this.player.getChunkBlobs().removeAll(packet.getBlobs().keySet());
         }
+        return PacketSignal.UNHANDLED;
+    }
+
+    @Override
+    public PacketSignal handle(CameraPresetsPacket packet) {
+        setCameraPresetDefinitions(packet.getPresets());
         return PacketSignal.UNHANDLED;
     }
 
@@ -147,5 +186,33 @@ public abstract class AbstractDownstreamHandler implements ProxyPacketHandler {
     @Override
     public ClientConnection getConnection() {
         return connection;
+    }
+
+    protected void setItemDefinitions(Collection<ItemDefinition> definitions) {
+        BedrockCodecHelper codecHelper = this.player.getConnection()
+                .getPeer()
+                .getCodecHelper();
+        SimpleDefinitionRegistry.Builder<ItemDefinition> itemRegistry = SimpleDefinitionRegistry.builder();
+        IntSet runtimeIds = new IntOpenHashSet();
+        for (ItemDefinition definition : definitions) {
+            if (runtimeIds.add(definition.getRuntimeId())) {
+                itemRegistry.add(definition);
+            } else {
+                player.getLogger().warning("[{}|{}] has duplicate item definition: {}", this.player.getName(), this.connection.getServerInfo().getServerName(), definition);
+            }
+        }
+        codecHelper.setItemDefinitions(itemRegistry.build());
+    }
+
+    protected void setCameraPresetDefinitions(Collection<CameraPreset> presets) {
+        BedrockCodecHelper codecHelper = this.player.getConnection()
+                .getPeer()
+                .getCodecHelper();
+        SimpleDefinitionRegistry.Builder<NamedDefinition> registry = SimpleDefinitionRegistry.builder();
+        int id = 0;
+        for (CameraPreset preset : presets) {
+            registry.add(new SimpleNamedDefinition(preset.getIdentifier(), id++));
+        }
+        codecHelper.setCameraPresetDefinitions(registry.build());
     }
 }
